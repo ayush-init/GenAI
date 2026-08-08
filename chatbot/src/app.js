@@ -1,7 +1,6 @@
 import {
-    normalizeEntities,
-    normalizeRelationships,
-} from "./extractor/entityNormalizer.js";
+    buildGraph,
+} from "./graph/graphBuilder.js";
 
 const entities = [
     {
@@ -10,74 +9,61 @@ const entities = [
         properties: {
             name: "OpenAI",
         },
+        canonicalKey: "company::openai",
     },
 
     {
         id: "e2",
-        label: "Company",
-        properties: {
-            name: "OpenAI Inc.",
-        },
-    },
-
-    {
-        id: "e3",
-        label: "Company",
-        properties: {
-            name: "  OpenAI  ",
-        },
-    },
-
-    {
-        id: "e4",
         label: "Person",
         properties: {
             name: "Sam Altman",
         },
+        canonicalKey: "person::sam altman",
+    },
+
+    {
+        id: "e3",
+        label: "Product",
+        properties: {
+            name: "ChatGPT",
+        },
+        canonicalKey: "product::chatgpt",
     },
 ];
 
 const relationships = [
     {
-        source: "e4",
+        source: "e2",
         target: "e1",
         type: "founded",
     },
 
     {
-        source: "e4",
-        target: "e1",
-        type: "FOUNDED",
+        source: "e1",
+        target: "e3",
+        type: "develops",
     },
 ];
 
-const normalizedEntities =
-    normalizeEntities(entities);
+async function main() {
+    try {
+        await buildGraph(
+            entities,
+            relationships
+        );
 
-const normalizedRelationships =
-    normalizeRelationships(
-        relationships,
-        normalizedEntities
-    );
+        console.log(
+            "\n Test completed successfully."
+        );
+    } catch (error) {
+        console.error(
+            "\n Graph Error:"
+        );
 
-console.log("\n========== NORMALIZED ENTITIES ==========\n");
+        console.error(
+            error.message
+        );
+    }
+}
 
-console.log(
-    JSON.stringify(
-        normalizedEntities,
-        null,
-        2
-    )
-);
-
-console.log(
-    "\n========== NORMALIZED RELATIONSHIPS ==========\n"
-);
-
-console.log(
-    JSON.stringify(
-        normalizedRelationships,
-        null,
-        2
-    )
-);
+main();
