@@ -9,56 +9,36 @@ import {
 } from "../extractor/entityNormalizer.js";
 
 import { buildGraph } from "../graph/graphBuilder.js";
-
 import { upsertChunks } from "../vector/pineconeStore.js";
 
 
-/**
- * Index a complete PDF.
- *
- * Pipeline:
- *
- * PDF
- *  ↓
- * Pages
- *  ↓
- * Chunks
- *  ↓
- * Entity Extraction
- *  ↓
- * Normalization
- *  ↓
- * Neo4j
- *  +
- * Pinecone
- */
 export async function indexPDF(
     filePath,
     documentId
 ) {
     console.log("\n======================================");
-    console.log(" STARTING DOCUMENT INDEXING");
+    console.log("🚀 STARTING DOCUMENT INDEXING");
     console.log("======================================\n");
 
 
     // =====================================
-    // STEP 1 — Load PDF
+    // STEP 1 — LOAD PDF
     // =====================================
 
-    console.log(" Step 1: Loading PDF...");
+    console.log("📄 Step 1: Loading PDF...");
 
     const document = await loadPDF(filePath);
 
     console.log(
-        ` Loaded ${document.pageCount} pages\n`
+        `✅ Loaded ${document.pageCount} pages\n`
     );
 
 
     // =====================================
-    // STEP 2 — Create Chunks
+    // STEP 2 — CREATE CHUNKS
     // =====================================
 
-    console.log(" Step 2: Creating chunks...");
+    console.log("✂️ Step 2: Creating chunks...");
 
     const chunks = createChunks(
         document,
@@ -70,23 +50,28 @@ export async function indexPDF(
     );
 
     console.log(
-        ` Created ${chunks.length} chunks\n`
+        `✅ Created ${chunks.length} chunks\n`
     );
 
 
     // =====================================
-    // STEP 3 — Entity Extraction
+    // STEP 3 — PROCESS CHUNKS
     // =====================================
 
     console.log(
-        " Step 3: Extracting entities and relationships..."
+        "🧠 Step 3: Extracting + Normalizing...\n"
     );
 
-    const allEntities = [];
-    const allRelationships = [];
+
+    const globalEntityMap = new Map();
+    const globalRelationshipMap = new Map();
 
 
-    for (let i = 0; i < chunks.length; i++) {
+    for (
+        let i = 0;
+        i < chunks.length;
+        i++
+    ) {
 
         const chunk = chunks[i];
 
@@ -95,120 +80,210 @@ export async function indexPDF(
         );
 
 
+        // ---------------------------------
+        // LLM extraction
+        // ---------------------------------
+
         const extraction =
             await extractEntities(
                 chunk.text
             );
 
 
-        // Store chunk metadata with
-        // extracted entities.
-        for (const entity of extraction.entities) {
+        // ---------------------------------
+        // Normalize THIS chunk
+        // ---------------------------------
 
-            allEntities.push({
-                ...entity,
+        const {
+            entities: normalizedEntities,
+            idMap,
+        } = normalizeEntities(
+            extraction.entities
+        );
 
-                sourceChunkId: chunk.id,
 
-                sourcePage: chunk.pageNumber,
-            });
+        const normalizedRelationships =
+            normalizeRelationships(
+                extraction.relationships,
+                idMap
+            );
 
+
+        // ---------------------------------
+        // Add entities to global map
+        // ---------------------------------
+
+        for (
+            const entity
+            of normalizedEntities
+        ) {
+
+            const key =
+                entity.canonicalKey;
+
+
+            if (
+                !globalEntityMap.has(key)
+            ) {
+
+                globalEntityMap.set(
+                    key,
+                    {
+                        ...entity,
+
+                        sourceChunks: [
+                            chunk.id
+                        ],
+
+                        sourcePages: [
+                            chunk.pageNumber
+                        ],
+                    }
+                );
+
+            } else {
+
+                const existing =
+                    globalEntityMap.get(key);
+
+
+                existing.properties = {
+                    ...existing.properties,
+                    ...entity.properties,
+                };
+
+
+                if (
+                    !existing.sourceChunks.includes(
+                        chunk.id
+                    )
+                ) {
+                    existing.sourceChunks.push(
+                        chunk.id
+                    );
+                }
+
+
+                if (
+                    !existing.sourcePages.includes(
+                        chunk.pageNumber
+                    )
+                ) {
+                    existing.sourcePages.push(
+                        chunk.pageNumber
+                    );
+                }
+            }
         }
 
 
+        // ---------------------------------
+        // Add relationships globally
+        // ---------------------------------
+
         for (
             const relationship
-            of extraction.relationships
+            of normalizedRelationships
         ) {
 
-            allRelationships.push({
-                ...relationship,
+            const key =
+                `${relationship.source}::` +
+                `${relationship.type}::` +
+                `${relationship.target}`;
 
-                sourceChunkId: chunk.id,
 
-                sourcePage: chunk.pageNumber,
-            });
+            if (
+                !globalRelationshipMap.has(key)
+            ) {
 
+                globalRelationshipMap.set(
+                    key,
+                    relationship
+                );
+            }
+        }
+
+
+        // ---------------------------------
+        // Progress
+        // ---------------------------------
+
+        if (
+            (i + 1) % 10 === 0 ||
+            i === chunks.length - 1
+        ) {
+
+            console.log(
+                `   📊 Entities: ${globalEntityMap.size} | ` +
+                `Relationships: ${globalRelationshipMap.size}`
+            );
         }
     }
 
 
-    console.log(
-        `\n Raw entities: ${allEntities.length}`
-    );
-
-    console.log(
-        ` Raw relationships: ${allRelationships.length}\n`
-    );
+    const finalEntities =
+        Array.from(
+            globalEntityMap.values()
+        );
 
 
-    // =====================================
-    // STEP 4 — Normalize Entities
-    // =====================================
-
-    console.log(
-        " Step 4: Normalizing entities..."
-    );
-
-
-    const normalizedEntities =
-        normalizeEntities(
-            allEntities
+    const finalRelationships =
+        Array.from(
+            globalRelationshipMap.values()
         );
 
 
     console.log(
-        ` Unique entities: ${normalizedEntities.length}\n`
+        "\n======================================"
+    );
+
+    console.log(
+        "📊 EXTRACTION SUMMARY"
+    );
+
+    console.log(
+        "======================================"
+    );
+
+    console.log(
+        `Chunks: ${chunks.length}`
+    );
+
+    console.log(
+        `Unique Entities: ${finalEntities.length}`
+    );
+
+    console.log(
+        `Unique Relationships: ${finalRelationships.length}`
     );
 
 
     // =====================================
-    // STEP 5 — Normalize Relationships
+    // STEP 4 — NEO4J
     // =====================================
 
     console.log(
-        " Step 5: Normalizing relationships..."
-    );
-
-
-    const normalizedRelationships =
-        normalizeRelationships(
-            allRelationships,
-            normalizedEntities
-        );
-
-
-    console.log(
-        ` Unique relationships: ${normalizedRelationships.length}\n`
-    );
-
-
-    // =====================================
-    // STEP 6 — Build Neo4j Graph
-    // =====================================
-
-    console.log(
-        " Step 6: Building Neo4j graph..."
+        "\n🕸️ Step 4: Building Neo4j graph..."
     );
 
 
     await buildGraph(
-        normalizedEntities,
-        normalizedRelationships
+        finalEntities,
+        finalRelationships
     );
 
 
     console.log(
-        " Neo4j graph completed.\n"
+        "✅ Neo4j indexing completed."
     );
 
 
     // =====================================
-    // STEP 7 — Store Vectors
+    // STEP 5 — PINECONE
     // =====================================
 
     console.log(
-        " Step 7: Storing vectors in Pinecone..."
+        "\n🔢 Step 5: Indexing vectors..."
     );
 
 
@@ -218,11 +293,20 @@ export async function indexPDF(
 
 
     console.log(
+        "✅ Pinecone indexing completed."
+    );
+
+
+    // =====================================
+    // FINAL
+    // =====================================
+
+    console.log(
         "\n======================================"
     );
 
     console.log(
-        " DOCUMENT INDEXING COMPLETED"
+        "🎉 DOCUMENT INDEXING COMPLETED"
     );
 
     console.log(
@@ -237,10 +321,9 @@ export async function indexPDF(
 
         chunks: chunks.length,
 
-        entities:
-            normalizedEntities.length,
+        entities: finalEntities.length,
 
         relationships:
-            normalizedRelationships.length,
+            finalRelationships.length,
     };
 }

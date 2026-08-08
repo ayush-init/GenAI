@@ -1,49 +1,41 @@
-import { loadPDF } from "./loaders/pdfLoader.js";
-import { createChunks } from "./splitter/textSplitter.js";
-import { extractEntities } from "./extractor/entityExtractor.js";
+import { indexPDF } from "./indexing/indexingPipeline.js";
+
 
 async function main() {
-    const document = await loadPDF(
-        "./data/pdfs/movies.pdf"
-    );
 
-    const chunks = createChunks(
-        document,
-        "Movies",
-        {
-            chunkSize: 1000,
-            chunkOverlap: 200,
-        }
-    );
+    try {
 
-    console.log(
-        `Total chunks: ${chunks.length}`
-    );
+        const result =
+            await indexPDF(
+                "./data/pdfs/movies.pdf",
+                "movies document"
+            );
 
-    console.log(
-        "\n🧠 Testing chunk 1...\n"
-    );
 
-    const result =
-        await extractEntities(
-            chunks[0].text
+        console.log(
+            "\n FINAL RESULT\n"
         );
 
-    console.log(
-        JSON.stringify(
-            result,
-            null,
-            2
-        )
-    );
+
+        console.log(
+            JSON.stringify(
+                result,
+                null,
+                2
+            )
+        );
+
+    } catch (error) {
+
+        console.error(
+            "\n INDEXING FAILED\n"
+        );
+
+        console.error(
+            error.message
+        );
+    }
 }
 
-main().catch((error) => {
-    console.error(
-        "\n❌ ERROR\n"
-    );
 
-    console.error(
-        error.message
-    );
-});
+main();
