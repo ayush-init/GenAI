@@ -1,6 +1,5 @@
 /**
- * Normalize an entity name so that small formatting
- * differences don't create duplicate graph nodes.
+ * Normalize an entity name.
  */
 function normalizeName(name) {
     if (!name || typeof name !== "string") {
@@ -13,6 +12,7 @@ function normalizeName(name) {
         .replace(/\s+/g, " ")
         .toLowerCase();
 }
+
 
 /**
  * Normalize an entity label.
@@ -29,16 +29,15 @@ function normalizeLabel(label) {
         .replace(/^\w/, (char) => char.toUpperCase());
 }
 
+
 /**
- * Create a stable key for an entity.
+ * Create a stable canonical key.
  *
  * Example:
  *
- * OpenAI + Company
+ * Company + OpenAI
  *
- * becomes:
- *
- * company::openai
+ * => company::openai
  */
 function createEntityKey(entity) {
     const name = entity.properties?.name ?? "";
@@ -48,18 +47,34 @@ function createEntityKey(entity) {
     return `${label.toLowerCase()}::${normalizeName(name)}`;
 }
 
+
 /**
  * Normalize and deduplicate entities.
+ *
+ * Also creates a mapping:
+ *
+ * temporary LLM ID
+ *        ↓
+ * canonical entity key
  */
 export function normalizeEntities(entities) {
     const entityMap = new Map();
 
+    // Important:
+    // This map allows relationships to be remapped later.
+    const idMap = new Map();
+
     for (const entity of entities) {
-        if (!entity || !entity.properties?.name) {
+
+        if (
+            !entity ||
+            !entity.properties?.name
+        ) {
             continue;
         }
 
-        const normalizedLabel = normalizeLabel(entity.label);
+        const normalizedLabel =
+            normalizeLabel(entity.label);
 
         const normalizedName =
             entity.properties.name
@@ -69,8 +84,11 @@ export function normalizeEntities(entities) {
 
         const key = createEntityKey(entity);
 
+        // First occurrence
         if (!entityMap.has(key)) {
+
             entityMap.set(key, {
+
                 ...entity,
 
                 label: normalizedLabel,
@@ -82,36 +100,62 @@ export function normalizeEntities(entities) {
 
                 canonicalKey: key,
             });
+
         } else {
-            // Merge additional properties if the entity
-            // appeared in another chunk.
-            const existing = entityMap.get(key);
+
+            // Duplicate entity found.
+            // Merge its properties.
+            const existing =
+                entityMap.get(key);
 
             existing.properties = {
-                ...existing.properties,
                 ...entity.properties,
+                ...existing.properties,
             };
+        }
+
+        // VERY IMPORTANT:
+        //
+        // Whatever temporary ID the LLM gave us,
+        // map it to the canonical key.
+        //
+        // Example:
+        //
+        // Zendaya_1 -> person::zendaya
+        // Zendaya_2 -> person::zendaya
+
+        if (entity.id) {
+            idMap.set(
+                entity.id,
+                key
+            );
         }
     }
 
-    return Array.from(entityMap.values());
+    return {
+        entities: Array.from(
+            entityMap.values()
+        ),
+
+        idMap,
+    };
 }
 
 
 /**
  * Normalize and deduplicate relationships.
+ *
+ * Converts temporary entity IDs into
+ * canonical entity IDs.
  */
 export function normalizeRelationships(
     relationships,
-    entities
+    idMap
 ) {
-    const entityKeys = new Set(
-        entities.map((entity) => entity.canonicalKey)
-    );
-
     const relationshipMap = new Map();
 
     for (const relationship of relationships) {
+
         if (
             !relationship ||
             !relationship.source ||
@@ -121,21 +165,53 @@ export function normalizeRelationships(
             continue;
         }
 
-        const type = relationship.type
-            .trim()
-            .replace(/\s+/g, "_")
-            .toUpperCase();
+        // Convert LLM temporary IDs
+        // into canonical entity keys.
+        const source =
+            idMap.get(
+                relationship.source
+            );
 
-        const key = `${relationship.source}::${type}::${relationship.target}`;
+        const target =
+            idMap.get(
+                relationship.target
+            );
+
+        // If either entity doesn't exist,
+        // discard the relationship.
+        if (!source || !target) {
+
+            console.warn(
+                `⚠️ Skipping relationship: ${relationship.source} -> ${relationship.target}`
+            );
+
+            continue;
+        }
+
+        const type =
+            relationship.type
+                .trim()
+                .replace(/\s+/g, "_")
+                .toUpperCase();
+
+        // Canonical relationship key.
+        const key =
+            `${source}::${type}::${target}`;
 
         if (!relationshipMap.has(key)) {
-            relationshipMap.set(key, {
-                source: relationship.source,
-                target: relationship.target,
-                type,
-            });
+
+            relationshipMap.set(
+                key,
+                {
+                    source,
+                    target,
+                    type,
+                }
+            );
         }
     }
 
-    return Array.from(relationshipMap.values());
+    return Array.from(
+        relationshipMap.values()
+    );
 }

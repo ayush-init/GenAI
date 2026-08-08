@@ -1,41 +1,49 @@
 import { loadPDF } from "./loaders/pdfLoader.js";
 import { createChunks } from "./splitter/textSplitter.js";
-import { upsertChunks } from "./vector/pineconeStore.js";
+import { extractEntities } from "./extractor/entityExtractor.js";
 
 async function main() {
-    try {
-        console.log("\n📄 Loading PDF...\n");
+    const document = await loadPDF(
+        "./data/pdfs/movies.pdf"
+    );
 
-        const document = await loadPDF(
-            "./data/pdfs/movies.pdf"
+    const chunks = createChunks(
+        document,
+        "Movies",
+        {
+            chunkSize: 1000,
+            chunkOverlap: 200,
+        }
+    );
+
+    console.log(
+        `Total chunks: ${chunks.length}`
+    );
+
+    console.log(
+        "\n🧠 Testing chunk 1...\n"
+    );
+
+    const result =
+        await extractEntities(
+            chunks[0].text
         );
 
-        console.log(
-            `✅ Loaded ${document.pageCount} pages`
-        );
-
-        const chunks = createChunks(
-            document,
-            "sample-document",
-            {
-                chunkSize: 1000,
-                chunkOverlap: 200,
-            }
-        );
-
-        console.log(
-            `✅ Created ${chunks.length} chunks`
-        );
-
-        await upsertChunks(chunks);
-
-        console.log(
-            "\n🎉 Vector indexing completed."
-        );
-    } catch (error) {
-        console.error("\n❌ Error:");
-        console.error(error.message);
-    }
+    console.log(
+        JSON.stringify(
+            result,
+            null,
+            2
+        )
+    );
 }
 
-main();
+main().catch((error) => {
+    console.error(
+        "\n❌ ERROR\n"
+    );
+
+    console.error(
+        error.message
+    );
+});
