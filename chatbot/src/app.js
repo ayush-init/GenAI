@@ -1,68 +1,26 @@
-import {
-    buildGraph,
-} from "./graph/graphBuilder.js";
-
-const entities = [
-    {
-        id: "e1",
-        label: "Company",
-        properties: {
-            name: "OpenAI",
-        },
-        canonicalKey: "company::openai",
-    },
-
-    {
-        id: "e2",
-        label: "Person",
-        properties: {
-            name: "Sam Altman",
-        },
-        canonicalKey: "person::sam altman",
-    },
-
-    {
-        id: "e3",
-        label: "Product",
-        properties: {
-            name: "ChatGPT",
-        },
-        canonicalKey: "product::chatgpt",
-    },
-];
-
-const relationships = [
-    {
-        source: "e2",
-        target: "e1",
-        type: "founded",
-    },
-
-    {
-        source: "e1",
-        target: "e3",
-        type: "develops",
-    },
-];
+import { generateEmbedding } from "./embeddings/index.js";
 
 async function main() {
     try {
-        await buildGraph(
-            entities,
-            relationships
-        );
+        console.log("\n🧠 Generating embedding...\n");
+
+        const text =
+            "OpenAI develops artificial intelligence systems.";
+
+        const embedding =
+            await generateEmbedding(text);
+
+        console.log("✅ Embedding generated");
+
+        console.log("Dimensions:", embedding.length);
 
         console.log(
-            "\n Test completed successfully."
+            "First 10 values:",
+            embedding.slice(0, 10)
         );
     } catch (error) {
-        console.error(
-            "\n Graph Error:"
-        );
-
-        console.error(
-            error.message
-        );
+        console.error("\n❌ Error:");
+        console.error(error.message);
     }
 }
 

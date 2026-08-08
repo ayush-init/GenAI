@@ -20,9 +20,12 @@ const config = {
 
     ollama: {
         model: process.env.OLLAMA_MODEL,
+        embeddingModel: process.env.OLLAMA_EMBEDDING_MODEL,
     },
 
     llmProvider: process.env.LLM_PROVIDER,
+
+    embeddingProvider: process.env.EMBEDDING_PROVIDER,
 };
 
 export default config;
