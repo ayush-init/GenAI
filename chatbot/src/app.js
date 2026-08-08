@@ -1,57 +1,83 @@
-import { loadPDF } from "./loaders/pdfLoader.js";
-import { createChunks } from "./splitter/textSplitter.js";
-import { extractEntities } from "./extractor/entityExtractor.js";
+import {
+    normalizeEntities,
+    normalizeRelationships,
+} from "./extractor/entityNormalizer.js";
 
-async function main() {
-    try {
-        console.log("\n📄 Loading PDF...\n");
+const entities = [
+    {
+        id: "e1",
+        label: "Company",
+        properties: {
+            name: "OpenAI",
+        },
+    },
 
-        const document = await loadPDF(
-            "./data/pdfs/movies.pdf"
-        );
+    {
+        id: "e2",
+        label: "Company",
+        properties: {
+            name: "OpenAI Inc.",
+        },
+    },
 
-        console.log(
-            `✅ PDF loaded: ${document.pageCount} pages`
-        );
+    {
+        id: "e3",
+        label: "Company",
+        properties: {
+            name: "  OpenAI  ",
+        },
+    },
 
-        const chunks = createChunks(
-            document,
-            "sample-document",
-            {
-                chunkSize: 1000,
-                chunkOverlap: 200,
-            }
-        );
+    {
+        id: "e4",
+        label: "Person",
+        properties: {
+            name: "Sam Altman",
+        },
+    },
+];
 
-        console.log(
-            `✅ Created ${chunks.length} chunks`
-        );
+const relationships = [
+    {
+        source: "e4",
+        target: "e1",
+        type: "founded",
+    },
 
-        // Only test first chunk for now.
-        const firstChunk = chunks[0];
+    {
+        source: "e4",
+        target: "e1",
+        type: "FOUNDED",
+    },
+];
 
-        console.log("\n🧠 Sending first chunk to LLM...\n");
+const normalizedEntities =
+    normalizeEntities(entities);
 
-        const result = await extractEntities(
-            firstChunk.text
-        );
+const normalizedRelationships =
+    normalizeRelationships(
+        relationships,
+        normalizedEntities
+    );
 
-        console.log(
-            "\n========== EXTRACTED GRAPH ==========\n"
-        );
+console.log("\n========== NORMALIZED ENTITIES ==========\n");
 
-        console.log(
-            JSON.stringify(result, null, 2)
-        );
+console.log(
+    JSON.stringify(
+        normalizedEntities,
+        null,
+        2
+    )
+);
 
-        console.log(
-            "\n======================================\n"
-        );
+console.log(
+    "\n========== NORMALIZED RELATIONSHIPS ==========\n"
+);
 
-    } catch (error) {
-        console.error("\n❌ Error:\n");
-        console.error(error.message);
-    }
-}
-
-main();
+console.log(
+    JSON.stringify(
+        normalizedRelationships,
+        null,
+        2
+    )
+);
