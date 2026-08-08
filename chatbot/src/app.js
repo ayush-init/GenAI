@@ -1,13 +1,13 @@
-import { generate } from "./llm/index.js";
+import { loadPDF } from "./loader/pdfLoader.js";
 
 async function main() {
-    console.log("\n🚀 Testing LLM Layer...\n");
 
-    const response = await generate(
-        "Introduce yourself in exactly 2 lines."
-    );
+    const text = await loadPDF("./data/pdfs/movies.pdf");
 
-    console.log(response);
+    console.log("\n========== PDF TEXT ==========\n");
+
+    console.log(text);
+
 }
 
 main();
