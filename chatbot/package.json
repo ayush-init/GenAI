@@ -13,7 +13,7 @@
     "dotenv": "^17.4.2",
     "neo4j-driver": "^6.2.0",
     "ollama": "^0.5.18",
-    "pdf-parse": "^1.1.4",
+    "pdfjs-dist": "^6.2.108",
     "uuid": "^11.1.1"
   },
   "devDependencies": {
