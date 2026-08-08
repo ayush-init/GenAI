@@ -1,29 +1,56 @@
 import { loadPDF } from "./loaders/pdfLoader.js";
+import { createChunks } from "./splitter/textSplitter.js";
+import { extractEntities } from "./extractor/entityExtractor.js";
 
 async function main() {
     try {
         console.log("\n📄 Loading PDF...\n");
 
-        const document = await loadPDF("./data/pdfs/movies.pdf");
+        const document = await loadPDF(
+            "./data/pdfs/movies.pdf"
+        );
 
-        console.log("=================================");
-        console.log("PDF INFORMATION");
-        console.log("=================================");
+        console.log(
+            `✅ PDF loaded: ${document.pageCount} pages`
+        );
 
-        console.log("Total Pages:", document.pageCount);
+        const chunks = createChunks(
+            document,
+            "sample-document",
+            {
+                chunkSize: 1000,
+                chunkOverlap: 200,
+            }
+        );
 
-        console.log("\n=================================");
-        console.log("PAGE TEXT");
-        console.log("=================================\n");
+        console.log(
+            `✅ Created ${chunks.length} chunks`
+        );
 
-        for (const page of document.pages) {
-            console.log(`\n--- PAGE ${page.pageNumber} ---\n`);
-            console.log(page.text.slice(0, 1000));
-        }
+        // Only test first chunk for now.
+        const firstChunk = chunks[0];
 
-        console.log("\n\n✅ PDF loaded successfully!");
+        console.log("\n🧠 Sending first chunk to LLM...\n");
+
+        const result = await extractEntities(
+            firstChunk.text
+        );
+
+        console.log(
+            "\n========== EXTRACTED GRAPH ==========\n"
+        );
+
+        console.log(
+            JSON.stringify(result, null, 2)
+        );
+
+        console.log(
+            "\n======================================\n"
+        );
+
     } catch (error) {
-        console.error("\n❌ Error:", error.message);
+        console.error("\n❌ Error:\n");
+        console.error(error.message);
     }
 }
 
