@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "@google/genai": "^1.52.0",
+    "@langchain/core": "^1.2.5",
+    "@langchain/langgraph": "^1.4.9",
     "@pinecone-database/pinecone": "^6.1.4",
     "dotenv": "^17.4.2",
     "neo4j-driver": "^6.2.0",

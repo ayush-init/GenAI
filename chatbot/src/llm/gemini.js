@@ -1,14 +1,44 @@
-import { gemini } from "../config/clients.js";
+import { GoogleGenAI } from "@google/genai";
+import config from "../config/config.js";
 
-export async function generateWithGemini(prompt) {
-    try {
-        const response = await gemini.models.generateContent({
-            model: "gemini-2.5-flash",
+const ai = new GoogleGenAI({
+    apiKey: config.gemini.apiKey,
+});
+
+
+export async function generateWithGemini(
+    prompt,
+    options = {}
+) {
+    const response =
+        await ai.models.generateContent({
+            model: options.model || config.gemini.model || "gemini-2.5-flash",
+
             contents: prompt,
+
+            config: options.config || {},
         });
 
-        return response.text;
-    } catch (error) {
-        throw new Error(`Gemini Error: ${error.message}`);
-    }
+    return response.text;
+}
+
+
+export async function generateBatchWithGemini(
+    prompt
+) {
+    const response =
+        await ai.models.generateContent({
+            model: config.gemini.model || "gemini-2.5-flash",
+
+            contents: prompt,
+
+            config: {
+                temperature: 0,
+
+                responseMimeType:
+                    "application/json",
+            },
+        });
+
+    return response.text;
 }
