@@ -1,22 +1,36 @@
-import { generateEmbedding } from "./embeddings/index.js";
+import { loadPDF } from "./loaders/pdfLoader.js";
+import { createChunks } from "./splitter/textSplitter.js";
+import { upsertChunks } from "./vector/pineconeStore.js";
 
 async function main() {
     try {
-        console.log("\n🧠 Generating embedding...\n");
+        console.log("\n📄 Loading PDF...\n");
 
-        const text =
-            "OpenAI develops artificial intelligence systems.";
-
-        const embedding =
-            await generateEmbedding(text);
-
-        console.log("✅ Embedding generated");
-
-        console.log("Dimensions:", embedding.length);
+        const document = await loadPDF(
+            "./data/pdfs/movies.pdf"
+        );
 
         console.log(
-            "First 10 values:",
-            embedding.slice(0, 10)
+            `✅ Loaded ${document.pageCount} pages`
+        );
+
+        const chunks = createChunks(
+            document,
+            "sample-document",
+            {
+                chunkSize: 1000,
+                chunkOverlap: 200,
+            }
+        );
+
+        console.log(
+            `✅ Created ${chunks.length} chunks`
+        );
+
+        await upsertChunks(chunks);
+
+        console.log(
+            "\n🎉 Vector indexing completed."
         );
     } catch (error) {
         console.error("\n❌ Error:");
