@@ -24,7 +24,7 @@ export function loadCheckpoint(documentId) {
             return JSON.parse(raw);
         }
     } catch (e) {
-        console.warn("⚠️ Could not read checkpoint file:", e.message);
+        console.warn("Could not read checkpoint file:", e.message);
     }
     return null;
 }
@@ -45,9 +45,9 @@ export function saveCheckpoint(state) {
             updatedAt: new Date().toISOString(),
         };
         fs.writeFileSync(filePath, JSON.stringify(dataToSave, null, 2), "utf-8");
-        console.log(`💾 Checkpoint saved at batch ${state.currentBatchIndex}/${state.totalBatches}`);
+        console.log(`Checkpoint saved at batch ${state.currentBatchIndex}/${state.totalBatches}`);
     } catch (e) {
-        console.error("❌ Failed to save checkpoint:", e.message);
+        console.error("Failed to save checkpoint:", e.message);
     }
 }
 
@@ -56,7 +56,7 @@ export function clearCheckpoint(documentId) {
         const filePath = getCheckpointPath(documentId);
         if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
-            console.log(`🧹 Checkpoint cleared for document: ${documentId}`);
+            console.log(`Checkpoint cleared for document: ${documentId}`);
         }
     } catch (e) {
         // ignore
@@ -114,14 +114,14 @@ const IndexingState = Annotation.Root({
 // ==========================================
 
 async function loadPdfNode(state) {
-    console.log("\n📄 [LangGraph Node: loadPDF] Loading PDF...");
+    console.log("\n[LangGraph Node: loadPDF] Loading PDF...");
     const document = await loadPDF(state.filePath);
-    console.log(`✅ Loaded ${document.pageCount} pages`);
+    console.log(`Loaded ${document.pageCount} pages`);
     return { document };
 }
 
 async function chunkingNode(state) {
-    console.log("\n✂️ [LangGraph Node: Chunking] Creating text chunks...");
+    console.log("\n[LangGraph Node: Chunking] Creating text chunks...");
     const chunks = createChunks(state.document, state.documentId, {
         chunkSize: 1000,
         chunkOverlap: 200,
@@ -130,12 +130,12 @@ async function chunkingNode(state) {
     const batchSize = state.batchSize || 10;
     const totalBatches = Math.ceil(chunks.length / batchSize);
 
-    console.log(`✅ Created ${chunks.length} chunks (${totalBatches} total batches)`);
+    console.log(`Created ${chunks.length} chunks (${totalBatches} total batches)`);
 
     // Check for existing saved checkpoint
     const checkpoint = loadCheckpoint(state.documentId);
     if (checkpoint && checkpoint.currentBatchIndex > 0) {
-        console.log(`\n🔄 [Checkpoint Found] Resuming indexing from batch ${checkpoint.currentBatchIndex + 1}/${totalBatches}...`);
+        console.log(`\n[Checkpoint Found] Resuming indexing from batch ${checkpoint.currentBatchIndex + 1}/${totalBatches}...`);
         return {
             chunks,
             batchSize,
@@ -162,7 +162,7 @@ async function processBatchNode(state) {
     const start = currentBatchIndex * batchSize;
     const batch = chunks.slice(start, start + batchSize);
 
-    console.log(`\n🧠 [LangGraph Node: processBatch] Batch ${currentBatchIndex + 1}/${totalBatches} (Chunks ${start + 1}-${start + batch.length})...`);
+    console.log(`\n [LangGraph Node: processBatch] Batch ${currentBatchIndex + 1}/${totalBatches} (Chunks ${start + 1}-${start + batch.length})...`);
 
     try {
         const results = await extractBatch(batch);
@@ -182,7 +182,7 @@ async function processBatchNode(state) {
 }
 
 async function repairJsonNode(state) {
-    console.log(`\n🔧 [LangGraph Node: repairJSON] Attempting JSON repair for Batch ${state.currentBatchIndex + 1} (Attempt ${state.retryCount}/3)...`);
+    console.log(`\n [LangGraph Node: repairJSON] Attempting JSON repair for Batch ${state.currentBatchIndex + 1} (Attempt ${state.retryCount}/3)...`);
 
     const { chunks, batchSize, currentBatchIndex } = state;
     const start = currentBatchIndex * batchSize;
@@ -218,14 +218,14 @@ ${batch.map((c) => `<CHUNK_ID>${c.id}</CHUNK_ID>\n<TEXT>${c.text}</TEXT>`).join(
         const parsed = JSON.parse(cleaned);
 
         if (parsed && Array.isArray(parsed.results)) {
-            console.log("✅ JSON Repair Successful!");
+            console.log(" JSON Repair Successful!");
             return {
                 currentResults: parsed.results,
                 lastError: null,
             };
         }
     } catch (err) {
-        console.error("❌ JSON Repair failed:", err.message);
+        console.error(" JSON Repair failed:", err.message);
     }
 
     return {
@@ -310,15 +310,15 @@ async function finalStoreNode(state) {
     const finalEntities = Object.values(state.globalEntities);
     const finalRelationships = Object.values(state.globalRelationships);
 
-    console.log(`🟢 Unique entities: ${finalEntities.length}`);
-    console.log(`🔗 Unique relationships: ${finalRelationships.length}`);
+    console.log(` Unique entities: ${finalEntities.length}`);
+    console.log(` Unique relationships: ${finalRelationships.length}`);
 
     await buildGraph(finalEntities, finalRelationships);
-    console.log("✅ Neo4j graph indexing completed.");
+    console.log(" Neo4j graph indexing completed.");
 
-    console.log("\n🔢 Indexing Pinecone vector embeddings...");
+    console.log("\n Indexing Pinecone vector embeddings...");
     await upsertChunks(state.chunks);
-    console.log("✅ Pinecone vector indexing completed.");
+    console.log(" Pinecone vector indexing completed.");
 
     // Clean checkpoint file upon completion
     clearCheckpoint(state.documentId);
@@ -337,7 +337,7 @@ function shouldRetryOrStore(state) {
         if ((state.retryCount || 0) < 3) {
             return "repairJSON";
         }
-        console.error(`❌ Batch ${state.currentBatchIndex + 1} failed after 3 retries. Stopping execution.`);
+        console.error(` Batch ${state.currentBatchIndex + 1} failed after 3 retries. Stopping execution.`);
         return "PAUSE";
     }
     return "storeBatch";
