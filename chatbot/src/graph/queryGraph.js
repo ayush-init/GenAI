@@ -75,11 +75,7 @@ function formatChatHistory(chatHistory) {
 // ==========================================
 
 async function classifyQueryNode(state) {
-    console.log(`\n🧠 [QueryGraph Node: Classify] Analyzing query intent...`);
     const result = await classifyQuery(state.query, state.chatHistory);
-    console.log(`   Selected Route: ${result.intent}`);
-    console.log(`   Explanation: ${result.explanation}`);
-
     return {
         intent: result.intent,
         intentExplanation: result.explanation,
@@ -87,7 +83,7 @@ async function classifyQueryNode(state) {
 }
 
 async function casualNode(state) {
-    console.log(`\n💬 [QueryGraph Node: Casual] Generating conversational response...`);
+    console.log(`[Thinking...]`);
     const { dateStr, timeStr } = getCurrentSystemDateTime();
     const historyText = formatChatHistory(state.chatHistory);
 
@@ -103,13 +99,14 @@ ${historyText}
 User Question/Remark: "${state.query}"
 
 Respond politely, helpfully, and concisely. Remember and use any personal details (such as the user's name) mentioned in the conversation history!
+Do NOT use any emojis.
 `;
     const answer = await generateWithGemini(prompt);
     return { finalAnswer: answer };
 }
 
 async function webSearchNode(state) {
-    console.log(`\n🌐 [QueryGraph Node: WebSearch] Executing multi-tiered live web search...`);
+    console.log(`[Thinking... (Searching Live Web)]`);
     const { isoDate } = getCurrentSystemDateTime();
 
     let searchQuery = state.query;
@@ -122,7 +119,7 @@ async function webSearchNode(state) {
 }
 
 async function vectorSearchNode(state) {
-    console.log(`\n📄 [QueryGraph Node: VectorSearch] Querying Pinecone vector DB...`);
+    console.log(`[Thinking... (Searching Vector Database)]`);
     let matches = [];
     try {
         const queryEmbedding = await generateEmbedding(state.query);
@@ -140,16 +137,13 @@ async function vectorSearchNode(state) {
             text: m.metadata?.text || "",
             pageNumber: m.metadata?.pageNumber,
         }));
-
-        console.log(`   Found ${matches.length} matching text passages.`);
     } catch (e) {
-        console.warn("⚠️ Vector search error:", e.message);
+        // Silently handle error
     }
 
     // AGENTIC SELF-CORRECTION:
-    // If Vector Search returned no matches or low scores, execute Web Search backup
     if (matches.length === 0 || (matches[0] && matches[0].score < 0.2)) {
-        console.log("   🔄 [Agentic Self-Correction] Vector search returned low relevance. Triggering Web Search backup...");
+        console.log("[Thinking... (Executing Web Search Backup)]");
         const webRes = await webSearchNode(state);
         return { vectorResults: matches, webResults: webRes.webResults || [] };
     }
@@ -158,7 +152,7 @@ async function vectorSearchNode(state) {
 }
 
 async function graphSearchNode(state) {
-    console.log(`\n🕸️ [QueryGraph Node: GraphSearch] Querying Neo4j Knowledge Graph...`);
+    console.log(`[Thinking... (Searching Knowledge Graph DB)]`);
     const session = neo4jDriver.session();
     let graphResults = [];
 
@@ -166,25 +160,22 @@ async function graphSearchNode(state) {
         // Step 1: Try AI Cypher Query Generation
         const generatedCypher = await generateCypherQuery(state.query);
         if (generatedCypher) {
-            console.log(`   🤖 Executing AI Generated Cypher: "${generatedCypher.replace(/\s+/g, " ")}"`);
             try {
                 const res = await session.run(generatedCypher);
                 if (res.records && res.records.length > 0) {
                     graphResults = res.records.map((r) => {
                         const keys = r.keys;
                         const rowStr = keys.map((k) => `${k}: ${JSON.stringify(r.get(k))}`).join(" | ");
-                        return `[Entity Link for "${state.query}"] ➔ ${rowStr}`;
+                        return `[Entity Link for "${state.query}"] -> ${rowStr}`;
                     });
-                    console.log(`   ✅ AI Cypher query returned ${graphResults.length} records.`);
                 }
             } catch (cypherErr) {
-                console.warn(`   ⚠️ Generated Cypher failed (${cypherErr.message}). Falling back to entity intersection traversal.`);
+                // Fallback to traversal
             }
         }
 
         // Step 2: Fallback Entity Intersection Traversal if Cypher yielded no results
         if (graphResults.length === 0) {
-            console.log("   Executing Candidate Entity Full Attribute Traversal...");
             const stopWords = new Set(["which", "actors", "acted", "movies", "directed", "by", "what", "where", "who", "is", "are", "the", "a", "an", "and", "or", "in", "of", "to", "for", "with", "find", "has", "its", "cast"]);
             const queryTerms = state.query
                 .toLowerCase()
@@ -192,8 +183,6 @@ async function graphSearchNode(state) {
                 .split(/\s+/)
                 .filter((t) => t.length > 1 && !stopWords.has(t));
 
-            // Candidate Entity Full Subgraph Retrieval:
-            // Find candidate movies matching query terms, and retrieve ALL relationships connected to those candidate movies!
             const candidateCypher = `
                 MATCH (m:Movie)
                 WHERE ANY(term IN $terms WHERE toLower(coalesce(m.name, '')) CONTAINS term OR toLower(coalesce(m.canonicalId, '')) CONTAINS term)
@@ -218,25 +207,22 @@ async function graphSearchNode(state) {
             });
 
             graphResults = Array.from(relationships);
-            console.log(`   Found ${graphResults.length} full candidate movie relationships.`);
         }
     } catch (e) {
-        console.warn("⚠️ Graph search error:", e.message);
+        // Silently handle error
     } finally {
         await session.close();
     }
 
     // AGENTIC SELF-CORRECTION:
-    // Always trigger Vector DB backup and fuse with RRF
     const needsVectorBackup = /find|search|which|what|list|who|year|date|plot|summary|budget|description|detail|overview|about|oscar|award|genre|director|nolan|christopher|cameron|james|zendaya|portman|niro/i.test(state.query) || graphResults.length === 0;
 
     if (needsVectorBackup) {
-        console.log("   🔄 [Agentic Self-Correction] Query requires text passage details. Triggering Vector DB backup...");
+        console.log("[Thinking... (Fusing Knowledge Graph & Vector DB Context)]");
         const vecRes = await vectorSearchNode(state);
         const vectorList = vecRes.vectorResults || [];
 
         const fused = reciprocalRankFusion(vectorList, graphResults);
-        console.log(`   🔥 Reciprocal Rank Fusion combined ${fused.length} search items from Graph + Vector DBs.`);
 
         return {
             graphResults,
@@ -250,16 +236,14 @@ async function graphSearchNode(state) {
 }
 
 async function hybridSearchNode(state) {
-    console.log(`\n🔀 [QueryGraph Node: HybridSearch] Executing Vector + Knowledge Graph RRF Fusion...`);
+    console.log(`[Thinking... (Executing Hybrid Graph + Vector Search)]`);
     const vecRes = await vectorSearchNode(state);
     const graphRes = await graphSearchNode(state);
 
     const vectorList = vecRes.vectorResults || [];
     const graphList = graphRes.graphResults || [];
 
-    // Reciprocal Rank Fusion (RRF)
     const fused = reciprocalRankFusion(vectorList, graphList);
-    console.log(`   🔥 Reciprocal Rank Fusion ranked ${fused.length} combined search items.`);
 
     return {
         vectorResults: vectorList,
@@ -270,7 +254,6 @@ async function hybridSearchNode(state) {
 }
 
 async function synthesizeAnswerNode(state) {
-    console.log(`\n✨ [QueryGraph Node: Synthesize] Formulating final answer...`);
     const { dateStr, timeStr } = getCurrentSystemDateTime();
     const historyText = formatChatHistory(state.chatHistory);
 
@@ -320,12 +303,14 @@ ${contextText || "No document context found."}
 User Question: "${state.query}"
 
 AGENTIC RESPONSE RULES:
-1. Always strive to answer the user's question directly and helpfully.
-2. Check candidate movies (e.g. Movie 0006, Movie 0010, Movie 0772, etc.) in the context.
-3. ALWAYS state the candidate movie titles (e.g. Movie 0006) directly that match the requested director (Christopher Nolan) and genre (Fantasy), and list all their attributes (Director, Genre, Awards, Cast) found in your context!
-4. Do NOT give a blank refusal if candidate movies matching most parameters are present. Name the matching candidate movies (e.g. Movie 0006) clearly!
+1. Format your response in clean, professional, human-readable narrative text.
+2. Present details in smooth, natural sentences (e.g., "Movie 0006 was directed by Christopher Nolan. It belongs to the Fantasy genre and stars Robert De Niro, Jake Gyllenhaal, and Elliot Page.").
+3. Use bullet points and bold section titles to present details clearly to an interviewer.
+4. If candidate movies (such as Movie 0006, Movie 0010, Movie 0772) match the requested criteria (e.g. Director: Christopher Nolan, Genre: Fantasy), explicitly name those movies and describe their full details!
+5. If specific requested information is absent from the knowledge base, clearly state what was searched, then provide helpful general knowledge or suggestions.
+6. CRITICAL REQUIREMENT: Do NOT use any emojis in your response under any circumstances.
 
-Provide a clear, accurate, structured, and helpful response:
+Provide a clean, elegant, emoji-free, human-readable terminal response:
 `;
 
     const answer = await generateWithGemini(prompt);

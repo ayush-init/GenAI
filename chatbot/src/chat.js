@@ -14,13 +14,12 @@ async function startChat() {
         output: process.stdout,
     });
 
-    console.log("\n========================================================");
-    console.log("🤖 ADAPTIVE HYBRID GRAPH RAG CHATBOT INITIALIZED");
-    console.log("========================================================");
+    console.clear();
+    console.log("ADAPTIVE HYBRID GRAPH RAG ASSISTANT");
     console.log("Commands: Type 'exit' to quit | Type 'clear' to reset chat history\n");
 
     const promptUser = () => {
-        rl.question("\n👤 USER: ", async (userInput) => {
+        rl.question("\nAsk me anything: ", async (userInput) => {
             const query = userInput.trim();
 
             if (!query) {
@@ -29,18 +28,20 @@ async function startChat() {
             }
 
             if (query.toLowerCase() === "exit" || query.toLowerCase() === "quit") {
-                console.log("\n👋 Goodbye!");
+                console.log("\nGoodbye!");
                 rl.close();
                 process.exit(0);
             }
 
             if (query.toLowerCase() === "clear") {
                 memory.clear();
+                console.log("\nChat history cleared!");
                 promptUser();
                 return;
             }
 
             try {
+                console.log(""); // Spacing before status
                 // Pass current chat history to query graph
                 const result = await queryGraph.invoke({
                     query: query,
@@ -49,13 +50,13 @@ async function startChat() {
 
                 const answer = result.finalAnswer || "No response generated.";
 
-                console.log("\n🤖 ASSISTANT:");
+                console.log("\nASSISTANT:");
                 console.log(answer);
 
                 // Save turn into memory
                 memory.addTurn(query, answer);
             } catch (err) {
-                console.error("\n❌ Error during query execution:", err.message);
+                console.error("\nError during query execution:", err.message);
             }
 
             promptUser();
@@ -66,6 +67,6 @@ async function startChat() {
 }
 
 startChat().catch((err) => {
-    console.error("❌ Fatal Chat Error:", err);
+    console.error("Fatal Chat Error:", err);
     process.exit(1);
 });
