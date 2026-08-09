@@ -9,18 +9,14 @@ import {
 } from "./geminiEmbeddings.js";
 
 export async function generateEmbedding(text) {
-    switch (
-    config.embeddingProvider.toLowerCase()
-    ) {
+    const provider = (config.embeddingProvider || "gemini").toLowerCase();
+
+    switch (provider) {
         case "ollama":
             return await embedWithOllama(text);
 
         case "gemini":
-            return await embedWithGemini(text);
-
         default:
-            throw new Error(
-                `Unsupported embedding provider: ${config.embeddingProvider}`
-            );
+            return await embedWithGemini(text);
     }
 }

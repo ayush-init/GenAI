@@ -2,6 +2,8 @@ import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
 import { classifyQuery } from "../router/queryClassifier.js";
 import { generateWithGemini } from "../llm/gemini.js";
 import { performWebSearch } from "../tools/webSearch.js";
+import { reciprocalRankFusion } from "../fusion/rrfRanker.js";
+import { generateCypherQuery } from "./cypherGenerator.js";
 import { pinecone } from "../config/clients.js";
 import config from "../config/config.js";
 import { generateEmbedding } from "../embeddings/index.js";
@@ -32,6 +34,11 @@ const QueryState = Annotation.Root({
     }),
 
     webResults: Annotation({
+        value: (x, y) => (y !== undefined ? y : x),
+        default: () => [],
+    }),
+
+    fusedResults: Annotation({
         value: (x, y) => (y !== undefined ? y : x),
         default: () => [],
     }),
@@ -128,9 +135,30 @@ async function vectorSearchNode(state) {
 }
 
 async function graphSearchNode(state) {
-    console.log(`\n🕸️ [QueryGraph Node: GraphSearch] Performing 2-Hop Knowledge Graph Traversal in Neo4j...`);
+    console.log(`\n🕸️ [QueryGraph Node: GraphSearch] Querying Neo4j Knowledge Graph...`);
     const session = neo4jDriver.session();
     try {
+        // Step 1: Try AI Cypher Query Generation
+        const generatedCypher = await generateCypherQuery(state.query);
+        if (generatedCypher) {
+            console.log(`   🤖 Executing AI Generated Cypher: "${generatedCypher.replace(/\s+/g, " ")}"`);
+            try {
+                const res = await session.run(generatedCypher);
+                if (res.records && res.records.length > 0) {
+                    const formatted = res.records.map((r) => {
+                        const keys = r.keys;
+                        return keys.map((k) => `${k}: ${JSON.stringify(r.get(k))}`).join(" | ");
+                    });
+                    console.log(`   ✅ AI Cypher query returned ${formatted.length} records.`);
+                    return { graphResults: formatted };
+                }
+            } catch (cypherErr) {
+                console.warn(`   ⚠️ Generated Cypher failed execution (${cypherErr.message}). Falling back to 2-hop traversal.`);
+            }
+        }
+
+        // Step 2: Fallback 2-Hop Traversal Cypher
+        console.log("   Executing 2-Hop Subgraph Traversal Fallback...");
         const stopWords = new Set(["which", "actors", "acted", "movies", "directed", "by", "what", "where", "who", "is", "are", "the", "a", "an", "and", "or", "in", "of", "to", "for", "with"]);
         const queryTerms = state.query
             .toLowerCase()
@@ -138,9 +166,7 @@ async function graphSearchNode(state) {
             .split(/\s+/)
             .filter((t) => t.length > 2 && !stopWords.has(t));
 
-        console.log(`   Search Terms: [${queryTerms.join(", ")}]`);
-
-        const cypher = `
+        const fallbackCypher = `
             MATCH (n)
             WHERE ANY(term IN $terms WHERE toLower(coalesce(n.name, '')) CONTAINS term OR toLower(coalesce(n.canonicalId, '')) CONTAINS term)
             
@@ -157,15 +183,13 @@ async function graphSearchNode(state) {
             LIMIT 100
         `;
 
-        const res = await session.run(cypher, { terms: queryTerms });
-        
+        const res = await session.run(fallbackCypher, { terms: queryTerms });
         const relationships = new Set();
         
         res.records.forEach((r) => {
             const source = r.get("source");
             const rel1 = r.get("rel1");
             const target1 = r.get("target1");
-
             const rel2 = r.get("rel2");
             const target2 = r.get("target2");
 
@@ -190,13 +214,21 @@ async function graphSearchNode(state) {
 }
 
 async function hybridSearchNode(state) {
-    console.log(`\n🔀 [QueryGraph Node: HybridSearch] Combining Vector + Knowledge Graph search...`);
+    console.log(`\n🔀 [QueryGraph Node: HybridSearch] Executing Vector + Knowledge Graph RRF Fusion...`);
     const vecRes = await vectorSearchNode(state);
     const graphRes = await graphSearchNode(state);
 
+    const vectorList = vecRes.vectorResults || [];
+    const graphList = graphRes.graphResults || [];
+
+    // Reciprocal Rank Fusion (RRF)
+    const fused = reciprocalRankFusion(vectorList, graphList);
+    console.log(`   🔥 Reciprocal Rank Fusion ranked ${fused.length} combined search items.`);
+
     return {
-        vectorResults: vecRes.vectorResults || [],
-        graphResults: graphRes.graphResults || [],
+        vectorResults: vectorList,
+        graphResults: graphList,
+        fusedResults: fused,
     };
 }
 
@@ -213,22 +245,25 @@ async function synthesizeAnswerNode(state) {
         });
     }
 
-    if (state.vectorResults && state.vectorResults.length > 0) {
-        contextText += "=== TEXT PASSAGES (Pinecone Vector DB) ===\n";
-        state.vectorResults.forEach((v, i) => {
-            contextText += `[Passage ${i + 1} | Page ${v.pageNumber}]: ${v.text}\n\n`;
+    if (state.fusedResults && state.fusedResults.length > 0) {
+        contextText += "=== RE-RANKED HYBRID CONTEXT (Reciprocal Rank Fusion) ===\n";
+        state.fusedResults.forEach((item, i) => {
+            contextText += `[Rank ${i + 1} | Type: ${item.type} | RRF Score: ${item.rrfScore.toFixed(4)}]:\n${item.content}\n\n`;
         });
-    }
+    } else {
+        if (state.vectorResults && state.vectorResults.length > 0) {
+            contextText += "=== TEXT PASSAGES (Pinecone Vector DB) ===\n";
+            state.vectorResults.forEach((v, i) => {
+                contextText += `[Passage ${i + 1} | Page ${v.pageNumber}]: ${v.text}\n\n`;
+            });
+        }
 
-    if (state.graphResults && state.graphResults.length > 0) {
-        contextText += "=== KNOWLEDGE GRAPH RELATIONS (Neo4j Graph DB) ===\n";
-        state.graphResults.forEach((g) => {
-            if (typeof g === "string") {
-                contextText += `- ${g}\n`;
-            } else {
-                contextText += `- (${g.sourceLabel}:${g.source}) -[${g.rel}]-> (${g.targetLabel}:${g.target})\n`;
-            }
-        });
+        if (state.graphResults && state.graphResults.length > 0) {
+            contextText += "=== KNOWLEDGE GRAPH RELATIONS (Neo4j Graph DB) ===\n";
+            state.graphResults.forEach((g) => {
+                contextText += `- ${typeof g === "string" ? g : `${g.source} -> ${g.rel} -> ${g.target}`}\n`;
+            });
+        }
     }
 
     const prompt = `
@@ -239,8 +274,8 @@ CRITICAL SYSTEM METADATA:
 - CURRENT SYSTEM TIME: ${timeStr}
 
 INSTRUCTIONS:
-1. Always state TODAY'S EXACT REAL-WORLD DATE (${dateStr}) when asked for today's date. Never guess or infer a different date from search article publication dates.
-2. Use the provided context information to give an accurate, precise, and up-to-date response.
+1. Always state TODAY'S EXACT REAL-WORLD DATE (${dateStr}) when asked for today's date.
+2. Use the provided RRF re-ranked context information to give an accurate, precise, and up-to-date response.
 
 Context Information:
 ${contextText || "No context found."}
