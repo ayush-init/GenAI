@@ -1,6 +1,7 @@
 import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
 import { classifyQuery } from "../router/queryClassifier.js";
 import { generateWithGemini } from "../llm/gemini.js";
+import { performWebSearch } from "../tools/webSearch.js";
 import { pinecone } from "../config/clients.js";
 import config from "../config/config.js";
 import { generateEmbedding } from "../embeddings/index.js";
@@ -38,6 +39,20 @@ const QueryState = Annotation.Root({
     finalAnswer: Annotation(),
 });
 
+// Helper for exact date/time strings
+function getCurrentSystemDateTime() {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+    });
+    const timeStr = now.toLocaleTimeString("en-US");
+    const isoDate = now.toISOString().split("T")[0];
+    return { dateStr, timeStr, isoDate };
+}
+
 // ==========================================
 // Node Implementations
 // ==========================================
@@ -56,13 +71,33 @@ async function classifyQueryNode(state) {
 
 async function casualNode(state) {
     console.log(`\n💬 [QueryGraph Node: Casual] Generating conversational response...`);
+    const { dateStr, timeStr } = getCurrentSystemDateTime();
+
     const prompt = `
-You are a helpful AI Assistant. Respond politely and concisely to the user's remark.
+You are a helpful AI Assistant.
+System Information:
+- Current System Date: ${dateStr}
+- Current System Time: ${timeStr}
+
+Respond politely and concisely to the user's remark.
 
 User: "${state.query}"
 `;
     const answer = await generateWithGemini(prompt);
     return { finalAnswer: answer };
+}
+
+async function webSearchNode(state) {
+    console.log(`\n🌐 [QueryGraph Node: WebSearch] Executing multi-tiered live web search...`);
+    const { isoDate } = getCurrentSystemDateTime();
+
+    let searchQuery = state.query;
+    if (/today|latest|current|now|news|headlines/i.test(searchQuery)) {
+        searchQuery = `${searchQuery} ${isoDate}`;
+    }
+
+    const results = await performWebSearch(searchQuery, 5);
+    return { webResults: results };
 }
 
 async function vectorSearchNode(state) {
@@ -96,7 +131,6 @@ async function graphSearchNode(state) {
     console.log(`\n🕸️ [QueryGraph Node: GraphSearch] Performing 2-Hop Knowledge Graph Traversal in Neo4j...`);
     const session = neo4jDriver.session();
     try {
-        // Extract meaningful search terms (remove stop words)
         const stopWords = new Set(["which", "actors", "acted", "movies", "directed", "by", "what", "where", "who", "is", "are", "the", "a", "an", "and", "or", "in", "of", "to", "for", "with"]);
         const queryTerms = state.query
             .toLowerCase()
@@ -106,15 +140,11 @@ async function graphSearchNode(state) {
 
         console.log(`   Search Terms: [${queryTerms.join(", ")}]`);
 
-        // 2-Hop Traversal Cypher: (n)-[r1]-(m)-[r2]-(k)
         const cypher = `
             MATCH (n)
             WHERE ANY(term IN $terms WHERE toLower(coalesce(n.name, '')) CONTAINS term OR toLower(coalesce(n.canonicalId, '')) CONTAINS term)
             
-            // 1-Hop Relations
             OPTIONAL MATCH (n)-[r1]-(m)
-            
-            // 2-Hop Relations
             OPTIONAL MATCH (m)-[r2]-(k)
             WHERE NOT k = n
             
@@ -172,8 +202,16 @@ async function hybridSearchNode(state) {
 
 async function synthesizeAnswerNode(state) {
     console.log(`\n✨ [QueryGraph Node: Synthesize] Formulating final answer...`);
+    const { dateStr, timeStr } = getCurrentSystemDateTime();
 
     let contextText = "";
+
+    if (state.webResults && state.webResults.length > 0) {
+        contextText += "=== LIVE WEB SEARCH RESULTS ===\n";
+        state.webResults.forEach((w, i) => {
+            contextText += `[Web Result ${i + 1} | Source: ${w.provider} (${w.url})]:\nTitle: ${w.title}\nContent: ${w.snippet}\n\n`;
+        });
+    }
 
     if (state.vectorResults && state.vectorResults.length > 0) {
         contextText += "=== TEXT PASSAGES (Pinecone Vector DB) ===\n";
@@ -194,15 +232,22 @@ async function synthesizeAnswerNode(state) {
     }
 
     const prompt = `
-You are an advanced Hybrid Graph RAG AI Assistant.
-Answer the user's question accurately using the provided context information.
+You are an advanced Hybrid Graph RAG AI Assistant with Real-Time Web Search capabilities.
+
+CRITICAL SYSTEM METADATA:
+- TODAY'S EXACT REAL-WORLD DATE: ${dateStr}
+- CURRENT SYSTEM TIME: ${timeStr}
+
+INSTRUCTIONS:
+1. Always state TODAY'S EXACT REAL-WORLD DATE (${dateStr}) when asked for today's date. Never guess or infer a different date from search article publication dates.
+2. Use the provided context information to give an accurate, precise, and up-to-date response.
 
 Context Information:
-${contextText || "No document context found."}
+${contextText || "No context found."}
 
 User Question: "${state.query}"
 
-Provide a detailed, structured, and helpful response:
+Provide a clear, accurate, and perfectly structured response:
 `;
 
     const answer = await generateWithGemini(prompt);
@@ -218,7 +263,7 @@ function routeByIntent(state) {
         case "CASUAL":
             return "casual";
         case "WEB_SEARCH":
-            return "webSearch"; // Handled in Phase 3
+            return "webSearch";
         case "VECTOR_RAG":
             return "vectorSearch";
         case "GRAPH_RAG":
@@ -236,6 +281,7 @@ function routeByIntent(state) {
 const workflow = new StateGraph(QueryState)
     .addNode("classify", classifyQueryNode)
     .addNode("casual", casualNode)
+    .addNode("webSearch", webSearchNode)
     .addNode("vectorSearch", vectorSearchNode)
     .addNode("graphSearch", graphSearchNode)
     .addNode("hybridSearch", hybridSearchNode)
@@ -245,13 +291,14 @@ const workflow = new StateGraph(QueryState)
 
     .addConditionalEdges("classify", routeByIntent, {
         casual: "casual",
-        webSearch: "casual", // Placeholder for Phase 3 web search
+        webSearch: "webSearch",
         vectorSearch: "vectorSearch",
         graphSearch: "graphSearch",
         hybridSearch: "hybridSearch",
     })
 
     .addEdge("casual", END)
+    .addEdge("webSearch", "synthesize")
     .addEdge("vectorSearch", "synthesize")
     .addEdge("graphSearch", "synthesize")
     .addEdge("hybridSearch", "synthesize")

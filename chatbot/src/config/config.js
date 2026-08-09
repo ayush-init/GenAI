@@ -24,6 +24,9 @@ const config = {
         embeddingModel: process.env.OLLAMA_EMBEDDING_MODEL,
     },
 
+    tavilyApiKey: process.env.TAVILY_API_KEY,
+    serperApiKey: process.env.SERPER_API_KEY,
+
     llmProvider: process.env.LLM_PROVIDER,
 
     embeddingProvider: process.env.EMBEDDING_PROVIDER,
