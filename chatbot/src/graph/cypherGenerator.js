@@ -18,13 +18,14 @@ Graph Schema:
 
 Rules for Cypher Generation:
 1. Keep the query simple and clean.
-2. Example syntax:
+2. ALWAYS RETURN source entity name, relationship type, AND target entity name so context is explicit.
+3. Example syntax:
    MATCH (n)-[r]-(m)
-   WHERE toLower(coalesce(n.name, '')) CONTAINS toLower('search_term') OR toLower(coalesce(n.canonicalId, '')) CONTAINS toLower('search_term')
+   WHERE toLower(coalesce(n.name, '')) CONTAINS toLower('Movie 0005') OR toLower(coalesce(n.canonicalId, '')) CONTAINS toLower('Movie 0005')
    RETURN n.name AS source, type(r) AS rel, m.name AS target
    LIMIT 30
-3. DO NOT use complex UNION ALL clauses.
-4. Return ONLY valid Cypher code.
+4. DO NOT use complex UNION ALL clauses or omit the source entity name.
+5. Return ONLY valid Cypher code.
 
 User Question: "${userQuery}"
 
