@@ -7,11 +7,8 @@ export async function embedWithGemini(text) {
 
     try {
         const response = await gemini.models.embedContent({
-            model: "text-embedding-004",
+            model: "gemini-embedding-001",
             contents: text,
-            config: {
-                outputDimensionality: 3072,
-            },
         });
 
         return response.embeddings[0].values;

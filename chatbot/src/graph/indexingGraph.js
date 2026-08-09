@@ -1,8 +1,10 @@
 import fs from "fs";
 import path from "path";
 import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
+import config from "../config/config.js";
 import { loadPDF } from "../loaders/pdfLoader.js";
 import { createChunks } from "../splitter/textSplitter.js";
+import { analyzeDocument } from "../analyzer/documentAnalyzer.js";
 import { extractBatch, extractJSON, cleanJSONString } from "../extractor/batchEntityExtractor.js";
 import { normalizeEntities, normalizeRelationships } from "../extractor/entityNormalizer.js";
 import { buildGraph } from "../graph/graphBuilder.js";
@@ -40,8 +42,12 @@ export function saveCheckpoint(state) {
             filePath: state.filePath,
             currentBatchIndex: state.currentBatchIndex,
             totalBatches: state.totalBatches,
+            storageStrategy: state.storageStrategy,
+            strategyReason: state.strategyReason,
             globalEntities: state.globalEntities || {},
             globalRelationships: state.globalRelationships || {},
+            graphIndexed: state.graphIndexed || false,
+            vectorIndexed: state.vectorIndexed || false,
             updatedAt: new Date().toISOString(),
         };
         fs.writeFileSync(filePath, JSON.stringify(dataToSave, null, 2), "utf-8");
@@ -74,6 +80,14 @@ const IndexingState = Annotation.Root({
     document: Annotation(),
     chunks: Annotation(),
 
+    storageStrategy: Annotation({
+        value: (x, y) => (y !== undefined ? y : x),
+        default: () => null,
+    }),
+
+    strategyReason: Annotation(),
+    inMemoryContext: Annotation(),
+
     batchSize: Annotation({
         value: (x, y) => (y !== undefined ? y : x),
         default: () => 10,
@@ -97,6 +111,16 @@ const IndexingState = Annotation.Root({
     globalRelationships: Annotation({
         value: (x, y) => ({ ...x, ...y }),
         default: () => ({}),
+    }),
+
+    graphIndexed: Annotation({
+        value: (x, y) => (y !== undefined ? y : x),
+        default: () => false,
+    }),
+
+    vectorIndexed: Annotation({
+        value: (x, y) => (y !== undefined ? y : x),
+        default: () => false,
     }),
 
     currentResults: Annotation(),
@@ -127,9 +151,14 @@ async function chunkingNode(state) {
         chunkOverlap: 200,
     });
 
-    const batchSize = state.batchSize || 10;
+    const provider = (config.embeddingProvider || config.llmProvider || "gemini").toLowerCase();
+    const isOllama = provider === "ollama";
+    
+    // Dynamic batch size: Ollama = 1 (process 1 chunk at a time), Gemini = 10 (10 chunks per batch)
+    const batchSize = isOllama ? 1 : (state.batchSize || 10);
     const totalBatches = Math.ceil(chunks.length / batchSize);
 
+    console.log(`   Provider: ${provider.toUpperCase()} | Batch Size: ${batchSize} chunk(s)/batch`);
     console.log(`Created ${chunks.length} chunks (${totalBatches} total batches)`);
 
     // Check for existing saved checkpoint
@@ -141,8 +170,12 @@ async function chunkingNode(state) {
             batchSize,
             totalBatches,
             currentBatchIndex: checkpoint.currentBatchIndex,
+            storageStrategy: checkpoint.storageStrategy || null,
+            strategyReason: checkpoint.strategyReason || null,
             globalEntities: checkpoint.globalEntities || {},
             globalRelationships: checkpoint.globalRelationships || {},
+            graphIndexed: checkpoint.graphIndexed || false,
+            vectorIndexed: checkpoint.vectorIndexed || false,
         };
     }
 
@@ -153,6 +186,38 @@ async function chunkingNode(state) {
         currentBatchIndex: 0,
         globalEntities: {},
         globalRelationships: {},
+        graphIndexed: false,
+        vectorIndexed: false,
+    };
+}
+
+async function analyzeDocumentNode(state) {
+    // If checkpoint already has strategy, use it
+    if (state.storageStrategy) {
+        console.log(`\n[LangGraph Node: analyzeDocument] Using cached strategy: ${state.storageStrategy}`);
+        return {};
+    }
+
+    console.log("\n🧠 [LangGraph Node: analyzeDocument] Evaluating optimal ingestion strategy...");
+    const { strategy, reason } = await analyzeDocument(state.document, state.chunks);
+    console.log(`   Strategy Selected: ${strategy}`);
+    console.log(`   Reason: ${reason}`);
+
+    if (strategy === "IN_MEMORY_ONLY") {
+        const fullText = state.chunks.map((c) => c.text).join("\n\n");
+        clearCheckpoint(state.documentId);
+        return {
+            storageStrategy: strategy,
+            strategyReason: reason,
+            inMemoryContext: fullText,
+            graphIndexed: true,
+            vectorIndexed: true,
+        };
+    }
+
+    return {
+        storageStrategy: strategy,
+        strategyReason: reason,
     };
 }
 
@@ -188,7 +253,6 @@ async function repairJsonNode(state) {
     const start = currentBatchIndex * batchSize;
     const batch = chunks.slice(start, start + batchSize);
 
-    // Call Gemini with explicit JSON repair prompt
     const repairPrompt = `
 The previous JSON output for extracting entities/relationships failed with error:
 "${state.lastError}"
@@ -305,32 +369,60 @@ async function storeBatchNode(state) {
 }
 
 async function finalStoreNode(state) {
-    console.log("\n🕸️ [LangGraph Node: finalStore] Building Neo4j graph & Pinecone vector index...");
+    console.log("\n🕸️ [LangGraph Node: finalStore] Executing final storage pipeline...");
 
-    const finalEntities = Object.values(state.globalEntities);
-    const finalRelationships = Object.values(state.globalRelationships);
+    let updatedState = { ...state };
 
-    console.log(` Unique entities: ${finalEntities.length}`);
-    console.log(` Unique relationships: ${finalRelationships.length}`);
+    if (state.storageStrategy === "VECTOR_ONLY") {
+        console.log("⏩ [VECTOR_ONLY] Skipping Neo4j Knowledge Graph generation.");
+    } else if (state.graphIndexed) {
+        console.log("⏩ Neo4j graph is already built! Skipping Neo4j upload.");
+    } else {
+        const finalEntities = Object.values(state.globalEntities);
+        const finalRelationships = Object.values(state.globalRelationships);
+        console.log(` Unique entities: ${finalEntities.length}`);
+        console.log(` Unique relationships: ${finalRelationships.length}`);
+        await buildGraph(finalEntities, finalRelationships);
+        console.log("✅ Neo4j graph indexing completed.");
+        updatedState.graphIndexed = true;
+        saveCheckpoint(updatedState);
+    }
 
-    await buildGraph(finalEntities, finalRelationships);
-    console.log(" Neo4j graph indexing completed.");
+    if (state.vectorIndexed) {
+        console.log("⏩ Pinecone vectors are already uploaded! Skipping Pinecone upload.");
+    } else {
+        console.log("\n🔢 Indexing Pinecone vector embeddings...");
+        await upsertChunks(state.chunks);
+        console.log("✅ Pinecone vector indexing completed.");
+        updatedState.vectorIndexed = true;
+        saveCheckpoint(updatedState);
+    }
 
-    console.log("\n Indexing Pinecone vector embeddings...");
-    await upsertChunks(state.chunks);
-    console.log(" Pinecone vector indexing completed.");
-
-    // Clean checkpoint file upon completion
+    // Clean checkpoint file upon complete success
     clearCheckpoint(state.documentId);
 
     return {
         status: "COMPLETED",
+        graphIndexed: true,
+        vectorIndexed: true,
     };
 }
 
 // ==========================================
 // Routing Conditions
 // ==========================================
+
+function routeByStrategy(state) {
+    if (state.storageStrategy === "IN_MEMORY_ONLY") {
+        console.log("\n⚡ [IN_MEMORY_ONLY] Document kept purely in active RAM context window. Bypassing Neo4j & Pinecone.");
+        return "FINISH_IN_MEMORY";
+    }
+    if (state.storageStrategy === "VECTOR_ONLY") {
+        console.log("\n📄 [VECTOR_ONLY] Bypassing Knowledge Graph entity extraction. Proceeding directly to Vector DB storage.");
+        return "finalStore";
+    }
+    return "processBatch";
+}
 
 function shouldRetryOrStore(state) {
     if (state.lastError) {
@@ -357,6 +449,7 @@ function shouldContinueBatches(state) {
 const workflow = new StateGraph(IndexingState)
     .addNode("loadPDF", loadPdfNode)
     .addNode("chunking", chunkingNode)
+    .addNode("analyzeDocument", analyzeDocumentNode)
     .addNode("processBatch", processBatchNode)
     .addNode("repairJSON", repairJsonNode)
     .addNode("storeBatch", storeBatchNode)
@@ -364,7 +457,13 @@ const workflow = new StateGraph(IndexingState)
 
     .addEdge(START, "loadPDF")
     .addEdge("loadPDF", "chunking")
-    .addEdge("chunking", "processBatch")
+    .addEdge("chunking", "analyzeDocument")
+
+    .addConditionalEdges("analyzeDocument", routeByStrategy, {
+        FINISH_IN_MEMORY: END,
+        finalStore: "finalStore",
+        processBatch: "processBatch",
+    })
 
     .addConditionalEdges("processBatch", shouldRetryOrStore, {
         repairJSON: "repairJSON",

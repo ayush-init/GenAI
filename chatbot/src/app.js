@@ -7,7 +7,7 @@ async function main() {
 
         const result =
             await indexPDF(
-                "./data/pdfs/movies.pdf",
+                "./data/pdfs/Ayush__Resume_FSD.pdf",
                 "movies document"
             );
 
